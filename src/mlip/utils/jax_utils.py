@@ -17,6 +17,12 @@ import e3nn_jax as e3nn
 import jax
 import jax.numpy as jnp
 
+from mlip.utils.pallas_segment_sum import (
+    DEFAULT_MAX_NEIGHBORS,
+    deterministic_segment_sum_pallas,
+    pallas_segment_sum_available,
+)
+
 
 class TupleLeaf(tuple):
     """A tuple that is considered a leaf in a JAX pytree."""
@@ -53,7 +59,8 @@ def _deterministic_segment_sum(
 
     # Create one-hot matrix encoding the segment indices
     mask = jax.nn.one_hot(segment_ids, num_segments, dtype=data.dtype)
-    flat_result = jnp.dot(mask.T, flat_data)
+    # HIGHEST precision avoids large errors from reduced-precision matmul on GPU.
+    flat_result = jnp.dot(mask.T, flat_data, precision=jax.lax.Precision.HIGHEST)
 
     # Reshape back to original structure: (Segments, F1, F2...)
     output_shape = (num_segments,) + input_shape[1:]
@@ -65,11 +72,13 @@ def segment_sum(
     segment_ids: jnp.ndarray,
     num_segments: int,
     deterministic: bool = False,
+    deterministic_backend: str = "dense",
+    max_neighbors: int = DEFAULT_MAX_NEIGHBORS,
 ) -> e3nn.IrrepsArray | jnp.ndarray:
     """Compute segment sum with optional deterministic mode.
 
     Provides a universal replacement for `jax.ops.segment_sum`, with the option to
-    replace non-deterministic parallel reductions with dense matrix multiplication.
+    replace non-deterministic parallel reductions with a deterministic alternative.
 
     Args:
         data: The data to scatter. Can be a regular JAX array or an `e3nn.IrrepsArray`.
@@ -79,6 +88,14 @@ def segment_sum(
                       so that the output shape is statically known under jax.jit.
         deterministic: If `True`, uses a deterministic reduction operation. If `False`,
                        uses `jax.ops.segment_sum`.
+        deterministic_backend: Which deterministic implementation to use when
+            `deterministic=True`. `"dense"` (default) uses a one-hot matmul, O(num_items
+            * num_segments) but works on any backend. `"pallas"` uses a Pallas/Triton
+            kernel that sorts items by segment and reduces in O(num_items); it requires
+            a GPU and that no segment has more than `max_neighbors` items (see
+            `mlip.utils.pallas_segment_sum.max_degree` to check this for your data).
+        max_neighbors: Static upper bound on items per segment, only used when
+            `deterministic_backend="pallas"`.
 
     Returns:
         Array of shape `(output_size, ...)` where each segment contains the sum of all
@@ -93,6 +110,20 @@ def segment_sum(
 
     def _deterministic_path(operands):
         d, s = operands
+        if deterministic_backend == "pallas":
+            if not pallas_segment_sum_available():
+                raise RuntimeError(
+                    "deterministic_backend='pallas' requires a GPU backend, but "
+                    f"the current default backend is {jax.default_backend()!r}."
+                )
+            return deterministic_segment_sum_pallas(
+                d, s, num_segments=num_segments, max_neighbors=max_neighbors
+            )
+        if deterministic_backend != "dense":
+            raise ValueError(
+                f"Unknown deterministic_backend={deterministic_backend!r}, "
+                "expected 'dense' or 'pallas'."
+            )
         return _deterministic_segment_sum(d, s, num_segments=num_segments)
 
     # Branch on static Python bool: comes from model.config.

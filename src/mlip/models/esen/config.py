@@ -21,6 +21,7 @@ from typing_extensions import Self
 from mlip.models.config import MLIPNetworkConfig
 from mlip.models.options import Activation, RadialBasis, RadialEnvelope
 from mlip.typing.fields import PositiveInt
+from mlip.utils.pallas_segment_sum import DEFAULT_MAX_NEIGHBORS
 
 logger = logging.getLogger("mlip")
 
@@ -116,6 +117,15 @@ class EsenConfig(MLIPNetworkConfig):
         deterministic_scatter_ops: Whether to use deterministic scatter operations in
             the forward pass, ensuring deterministic energy outputs. Setting to
             `True` makes prediction slower. Default is `False`.
+        deterministic_scatter_backend: Which implementation to use for the
+            deterministic scatter operations when `deterministic_scatter_ops=True`.
+            `"dense"` (default) is a one-hot matmul that works on any backend.
+            `"pallas"` uses a Pallas/Triton kernel, only available on GPU, that is
+            substantially faster but requires that no node has more than
+            `max_neighbors` incoming edges (see
+            `mlip.utils.pallas_segment_sum.max_degree`).
+        max_neighbors: Static upper bound on the number of edges per node, only
+            used when `deterministic_scatter_backend="pallas"`. Default is 128.
     """
 
     num_species: int | None = None
@@ -140,6 +150,8 @@ class EsenConfig(MLIPNetworkConfig):
     use_total_charge_embedding: bool = False
     embed_activation: Activation = Activation.SILU
     deterministic_scatter_ops: bool = False
+    deterministic_scatter_backend: Literal["dense", "pallas"] = "dense"
+    max_neighbors: PositiveInt = DEFAULT_MAX_NEIGHBORS
 
     @model_validator(mode="after")
     def _enforce_partial_charges_for_coulomb_term(self) -> Self:

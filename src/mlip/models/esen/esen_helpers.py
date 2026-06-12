@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import math
-from typing import List, Sequence
+from typing import List, Literal, Sequence
 
 import flax.linen as nn
 import jax
@@ -22,6 +22,7 @@ from mlip.models.blocks import MLP
 from mlip.models.esen.coefficient_mapping import CoefficientMapping
 from mlip.models.esen.moe import MoEDense
 from mlip.utils.jax_utils import segment_sum
+from mlip.utils.pallas_segment_sum import DEFAULT_MAX_NEIGHBORS
 
 NODE_OFFSET = 0
 
@@ -429,6 +430,8 @@ class EdgeDegreeEmbedding(nn.Module):
     rescale_factor: float
     mapping_reduced: CoefficientMapping
     deterministic_scatter_ops: bool = False
+    deterministic_scatter_backend: Literal["dense", "pallas"] = "dense"
+    max_neighbors: int = DEFAULT_MAX_NEIGHBORS
 
     def setup(self) -> None:
         """Initializes the EdgeDegreeEmbedding layers."""
@@ -480,6 +483,8 @@ class EdgeDegreeEmbedding(nn.Module):
             dst,
             num_segments=x.shape[0],
             deterministic=self.deterministic_scatter_ops,
+            deterministic_backend=self.deterministic_scatter_backend,
+            max_neighbors=self.max_neighbors,
         )
 
         return x + summed

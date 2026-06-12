@@ -31,6 +31,7 @@ from mlip.models.esen.moe import (
 )
 from mlip.models.esen.normalisation import get_normalization_layer
 from mlip.utils.jax_utils import segment_sum
+from mlip.utils.pallas_segment_sum import DEFAULT_MAX_NEIGHBORS
 
 
 class ESENLayer(nn.Module):
@@ -45,6 +46,8 @@ class ESENLayer(nn.Module):
     act_type: Literal["gate"]
     num_experts: int | None = None
     deterministic_scatter_ops: bool = False
+    deterministic_scatter_backend: Literal["dense", "pallas"] = "dense"
+    max_neighbors: int = DEFAULT_MAX_NEIGHBORS
 
     def setup(self) -> None:
         """Initializes the Esen layer."""
@@ -68,6 +71,8 @@ class ESENLayer(nn.Module):
             act_type=self.act_type,
             num_experts=self.num_experts,
             deterministic_scatter_ops=self.deterministic_scatter_ops,
+            deterministic_scatter_backend=self.deterministic_scatter_backend,
+            max_neighbors=self.max_neighbors,
         )
 
         # atomwise (feed-forward head) spectral is default in UMA
@@ -165,6 +170,8 @@ class Edgewise(nn.Module):
     act_type: Literal["gate"] = "gate"
     num_experts: int | None = None
     deterministic_scatter_ops: bool = False
+    deterministic_scatter_backend: Literal["dense", "pallas"] = "dense"
+    max_neighbors: int = DEFAULT_MAX_NEIGHBORS
 
     def setup(self) -> None:
         """Initializes the edge-wise convolution layers."""
@@ -304,6 +311,8 @@ class Edgewise(nn.Module):
             dst_adj,
             num_segments=num_nodes,
             deterministic=self.deterministic_scatter_ops,
+            deterministic_backend=self.deterministic_scatter_backend,
+            max_neighbors=self.max_neighbors,
         )
 
         graph = graph.update_node_features(latent=node_feats)
