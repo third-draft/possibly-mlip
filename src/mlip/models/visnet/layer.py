@@ -200,13 +200,13 @@ class VisnetLayer(nn.Module):
 
     def _edge_update(
         self,
-        vec_i: jax.Array,
-        vec_j: jax.Array,
+        vec_i_proj: jax.Array,
+        vec_j_proj: jax.Array,
         d_ij: jax.Array,
         f_ij: jax.Array,
     ) -> jax.Array:
-        w1 = self._vector_rejection(self.w_trg_proj(vec_i), d_ij)
-        w2 = self._vector_rejection(self.w_src_proj(vec_j), -d_ij)
+        w1 = self._vector_rejection(vec_i_proj, d_ij)
+        w2 = self._vector_rejection(vec_j_proj, -d_ij)
         w_dot = (w1 * w2).sum(axis=1)
         df_ij = self.act(self.f_proj(f_ij)) * w_dot
         return df_ij
@@ -312,9 +312,15 @@ class VisnetLayer(nn.Module):
         dvec = vec3 * jnp.expand_dims(o1, 1) + vec_out
 
         if not self.last_layer:
+            # w_trg_proj/w_src_proj are linear maps over the channel axis, which
+            # commutes with gathering node features onto edges. Apply them once
+            # per node (and gather afterwards) instead of once per edge, since
+            # num_edges is typically much larger than num_nodes.
+            vector_feats_trg = self.w_trg_proj(vector_feats)
+            vector_feats_src = self.w_src_proj(vector_feats)
             df_ij = self._edge_update(
-                vector_feats[graph.receivers, :],
-                vec_j,
+                vector_feats_trg[graph.receivers, :],
+                vector_feats_src[graph.senders, :],
                 graph.edges.features["spherical_embedding"],
                 edge_feats,
             )
