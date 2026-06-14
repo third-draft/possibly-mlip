@@ -18,7 +18,7 @@
 # limitations under the License.
 
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal
 
 import flax.linen as nn
 import jax
@@ -35,6 +35,7 @@ from mlip.models.esen.coefficient_mapping import CoefficientMapping
 from mlip.models.esen.esen_helpers import NODE_OFFSET, EdgeDegreeEmbedding
 from mlip.models.esen.eulers import eulers_to_wigner, init_edge_rot_euler_angles
 from mlip.models.options import RadialBasis, RadialEnvelope, parse_radial_envelope
+from mlip.utils.pallas_segment_sum import DEFAULT_MAX_NEIGHBORS
 from mlip.utils.safe_norm import safe_norm
 
 ###############################
@@ -86,6 +87,8 @@ class EsenEmbeddingBlock(nn.Module):
     edge_channels_list: list[int]
     activation_fn: Callable = jax.nn.silu
     deterministic_scatter_ops: bool = False
+    deterministic_scatter_backend: Literal["dense", "pallas"] = "dense"
+    max_neighbors: int = DEFAULT_MAX_NEIGHBORS
 
     def setup(self) -> None:
         """Initializes the embedding layers for node species, radial functions,"""
@@ -137,6 +140,8 @@ class EsenEmbeddingBlock(nn.Module):
             rescale_factor=RESCALE_FACTOR,
             mapping_reduced=self.mapping_reduced,
             deterministic_scatter_ops=self.deterministic_scatter_ops,
+            deterministic_scatter_backend=self.deterministic_scatter_backend,
+            max_neighbors=self.max_neighbors,
         )
 
         self.coefficient_index = self.mapping_reduced.coefficient_idx(

@@ -188,26 +188,28 @@ class VisnetLayer(nn.Module):
 
         return v_j, vec_j
 
-    @nn.nowrap
-    def _vector_rejection(
-        self, vec: jax.Array, spherical_feats: jax.Array
-    ) -> jax.Array:
-        # Implement vector rejection logic using JAX
-        vec_proj = (vec * jnp.expand_dims(spherical_feats, 2)).sum(
-            axis=1, keepdims=True
-        )
-        return vec - vec_proj * jnp.expand_dims(spherical_feats, 2)
-
     def _edge_update(
         self,
-        vec_i: jax.Array,
-        vec_j: jax.Array,
+        vec_i_proj: jax.Array,
+        vec_j_proj: jax.Array,
         d_ij: jax.Array,
         f_ij: jax.Array,
     ) -> jax.Array:
-        w1 = self._vector_rejection(self.w_trg_proj(vec_i), d_ij)
-        w2 = self._vector_rejection(self.w_src_proj(vec_j), -d_ij)
-        w_dot = (w1 * w2).sum(axis=1)
+        # w_dot = sum_l w1[l] * w2[l], where w1 = reject(vec_i_proj, d_ij) and
+        # w2 = reject(vec_j_proj, -d_ij). Expanding the rejections and using
+        # sum_l d_ij[l]^2 = |d_ij|^2, the cross terms collapse to:
+        #   w_dot = <a, b> + <a, s> * <b, s> * (|s|^2 - 2)
+        # where a = vec_i_proj, b = vec_j_proj, s = d_ij, and <., .> denotes a
+        # dot product over the irrep axis. This avoids materializing the
+        # [n_edges, irrep_dim, num_channels] rejection vectors w1 and w2.
+        a, b, s = vec_i_proj, vec_j_proj, d_ij
+        s_expanded = jnp.expand_dims(s, 2)
+        a_dot_b = (a * b).sum(axis=1)
+        a_dot_s = (a * s_expanded).sum(axis=1)
+        b_dot_s = (b * s_expanded).sum(axis=1)
+        s_norm_sq = (s**2).sum(axis=1, keepdims=True)
+        w_dot = a_dot_b + a_dot_s * b_dot_s * (s_norm_sq - 2.0)
+
         df_ij = self.act(self.f_proj(f_ij)) * w_dot
         return df_ij
 
@@ -312,9 +314,15 @@ class VisnetLayer(nn.Module):
         dvec = vec3 * jnp.expand_dims(o1, 1) + vec_out
 
         if not self.last_layer:
+            # w_trg_proj/w_src_proj are linear maps over the channel axis, which
+            # commutes with gathering node features onto edges. Apply them once
+            # per node (and gather afterwards) instead of once per edge, since
+            # num_edges is typically much larger than num_nodes.
+            vector_feats_trg = self.w_trg_proj(vector_feats)
+            vector_feats_src = self.w_src_proj(vector_feats)
             df_ij = self._edge_update(
-                vector_feats[graph.receivers, :],
-                vec_j,
+                vector_feats_trg[graph.receivers, :],
+                vector_feats_src[graph.senders, :],
                 graph.edges.features["spherical_embedding"],
                 edge_feats,
             )
