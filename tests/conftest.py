@@ -34,6 +34,7 @@ from mlip.data.helpers.dummy_init_graph import (
 )
 from mlip.graph import Graph, GraphEdges, GraphGlobals, GraphNodes
 from mlip.models import Mace, Nequip, Visnet
+from mlip.models.visnet_old.network import Visnet as VisnetOld
 from mlip.models.blocks import SpeciesAssignmentBlock
 from mlip.models.config import MLIPNetworkConfig
 from mlip.models.esen.config import EsenConfig
@@ -247,7 +248,7 @@ def mace_config():
 
 @pytest.fixture(scope="session")
 def visnet_config():
-    return Visnet.Config(
+    return VisnetOld.Config(
         num_layers=2,
         num_channels=6,
         l_max=2,
@@ -352,7 +353,7 @@ def lri_mace_force_field(mace_config, dataset_info):
 
 @pytest.fixture(scope="session")
 def visnet_force_field(visnet_config, dataset_info):
-    visnet_model = Visnet(visnet_config, dataset_info)
+    visnet_model = VisnetOld(visnet_config, dataset_info)
     visnet_ff = ForceField.from_mlip_network(
         visnet_model,
         seed=42,
@@ -369,7 +370,7 @@ def partial_charges_visnet_force_field(visnet_config, dataset_info):
     partial_charges_config = visnet_config.model_copy(
         update={"predict_partial_charges": True}
     )
-    visnet_model = Visnet(partial_charges_config, dataset_info)
+    visnet_model = VisnetOld(partial_charges_config, dataset_info)
     visnet_ff = ForceField.from_mlip_network(
         visnet_model,
         seed=42,
@@ -389,7 +390,7 @@ def lri_visnet_force_field(visnet_config, dataset_info):
     lri_dataset_info = dataset_info.model_copy(
         update={"long_range_cutoff_angstrom": 5.0}
     )
-    visnet_model = Visnet(lri_config, lri_dataset_info)
+    visnet_model = VisnetOld(lri_config, lri_dataset_info)
     visnet_ff = ForceField.from_mlip_network(
         visnet_model,
         seed=42,
@@ -406,7 +407,36 @@ def total_charge_embedding_visnet_force_field(visnet_config, dataset_info):
     total_charge_embedding_config = visnet_config.model_copy(
         update={"use_total_charge_embedding": True}
     )
-    visnet_model = Visnet(total_charge_embedding_config, dataset_info)
+    visnet_model = VisnetOld(total_charge_embedding_config, dataset_info)
+    visnet_ff = ForceField.from_mlip_network(
+        visnet_model,
+        seed=42,
+        required_properties=Properties(stress=True),
+    )
+    return ForceField(
+        visnet_ff.predictor,
+        standardize_parameters(visnet_ff.params),
+    )
+
+
+@pytest.fixture(scope="session")
+def visnet_v2_config():
+    return Visnet.Config(
+        num_layers=2,
+        num_channels=6,
+        vec_channels=3,
+        l_max=2,
+        num_heads=2,
+        num_rbf=4,
+        activation="silu",
+        attn_activation="silu",
+        vecnorm_type="max_min",
+    )
+
+
+@pytest.fixture(scope="session")
+def visnet_v2_force_field(visnet_v2_config, dataset_info):
+    visnet_model = Visnet(visnet_v2_config, dataset_info)
     visnet_ff = ForceField.from_mlip_network(
         visnet_model,
         seed=42,

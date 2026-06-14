@@ -30,7 +30,7 @@ from mlip.models.blocks import (
 )
 from mlip.models.options import RadialBasis, RadialEnvelope, parse_activation
 from mlip.models.radial_embedding import cosine_cutoff
-from mlip.models.visnet.visnet_helpers import (
+from mlip.models.visnet_old.visnet_helpers import (
     LAYER_NORM_EPSILON,
     VEC_LAYER_NORM_EPSILON,
     VecLayerNorm,
@@ -49,8 +49,6 @@ class VisnetEmbeddingBlock(nn.Module):
     Attributes:
         l_max: Highest harmonic order included in the Spherical Harmonics series.
         num_channels: The number of channels.
-        vec_channels: The number of channels used for the equivariant vector
-            features. If `None`, defaults to `num_channels`.
         num_rbf: Number of basis functions used in the embedding block.
         trainable_rbf: Whether to add learnable weights to each of the radial embedding
                        basis functions.
@@ -68,7 +66,6 @@ class VisnetEmbeddingBlock(nn.Module):
     num_charges: int | None
     radial_basis: str | RadialBasis
     activation_fn: Callable | None
-    vec_channels: int | None = None
     deterministic_scatter_ops: bool = False
 
     def setup(self) -> None:
@@ -187,13 +184,10 @@ class VisnetEmbeddingBlock(nn.Module):
 
         graph = self.edge_embedding(graph)
 
-        vec_channels = (
-            self.vec_channels if self.vec_channels is not None else node_feats.shape[1]
-        )
         vec_shape = (
             node_feats.shape[0],
             ((self.l_max + 1) ** 2) - 1,
-            vec_channels,
+            node_feats.shape[1],
         )
         vector_feats = jnp.zeros(vec_shape, dtype=node_feats.dtype)
         graph = graph.update_node_features(embedding_vectors=vector_feats)
@@ -364,8 +358,6 @@ class VisnetMultiHeadReadoutBlock(nn.Module):
         vecnorm_type: The type of vector normalization to apply.
         l_max: Highest harmonic order included in the Spherical Harmonics series.
         predict_partial_charges: Whether to predict partial charges.
-        vec_channels: The number of channels used for the equivariant vector
-            features. If `None`, defaults to `num_channels`.
     """
 
     num_heads: int
@@ -374,7 +366,6 @@ class VisnetMultiHeadReadoutBlock(nn.Module):
     vecnorm_type: str
     l_max: int  # Required for input shape assertions.
     predict_partial_charges: bool
-    vec_channels: int | None = None
 
     def setup(self) -> None:
         """Initializes the output processing network."""
@@ -406,9 +397,6 @@ class VisnetMultiHeadReadoutBlock(nn.Module):
         )
 
     def _input_shape_assertions(self, graph: Graph) -> None:
-        vec_channels = (
-            self.vec_channels if self.vec_channels is not None else self.num_channels
-        )
         assert graph.nodes.features["latent_scalars"].ndim == 2
         assert graph.nodes.features["latent_scalars"].shape[1] == self.num_channels
         assert graph.edges.features["latent"].ndim == 2
@@ -418,7 +406,7 @@ class VisnetMultiHeadReadoutBlock(nn.Module):
             graph.nodes.features["latent_vectors"].shape[1]
             == ((self.l_max + 1) ** 2) - 1
         )
-        assert graph.nodes.features["latent_vectors"].shape[2] == vec_channels
+        assert graph.nodes.features["latent_vectors"].shape[2] == self.num_channels
 
     def __call__(self, graph: Graph) -> Graph:
         """Applies the final output processing network to node and edge features.

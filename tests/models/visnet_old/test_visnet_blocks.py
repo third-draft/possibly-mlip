@@ -4,7 +4,7 @@ import jax.numpy as jnp
 
 from mlip.graph import Graph, GraphEdges, GraphGlobals, GraphNodes
 from mlip.models.blocks import SphericalHarmonicsBlock
-from mlip.models.visnet.blocks import (
+from mlip.models.visnet_old.blocks import (
     VisnetEdgeEmbeddingBlock,
     VisnetEmbeddingBlock,
     VisnetMultiHeadReadoutBlock,

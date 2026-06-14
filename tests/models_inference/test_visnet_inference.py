@@ -23,7 +23,7 @@ from numpy.testing import assert_allclose
 from mlip.data import ChemicalSystem
 from mlip.graph import Graph
 from mlip.models.force_field import ForceField
-from mlip.models.visnet.network import Visnet
+from mlip.models.visnet_old.network import Visnet
 
 
 def test_visnet_outputs_correct_forces_and_energies_for_single_graph(

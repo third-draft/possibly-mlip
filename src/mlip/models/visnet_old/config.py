@@ -18,43 +18,16 @@ from typing_extensions import Self
 
 from mlip.models.config import MLIPNetworkConfig
 from mlip.models.options import Activation, RadialBasis
-from mlip.models.visnet.visnet_helpers import VecNormType
+from mlip.models.visnet_old.visnet_helpers import VecNormType
 from mlip.typing import NonNegativeInt, PositiveInt
 
 
 class VisnetConfig(MLIPNetworkConfig):
     """Hyperparameters for the ViSNet model.
 
-    This is a variant of the original ViSNet architecture (see
-    ``mlip.models.visnet_old``) with two changes aimed at reducing runtime and
-    memory:
-
-    - The equivariant vector-feature channel width (``vec_channels``) can be
-      set independently of the scalar channel width (``num_channels``),
-      shrinking the ``[*, irrep_dim, channels]`` tensors that dominate the
-      cost of each layer.
-    - Several same-input ``Dense`` projections are fused into single matmuls
-      (``fuse_projections``).
-
-    Both changes alter the parameter structure relative to
-    ``mlip.models.visnet_old``, so checkpoints are not interchangeable between
-    the two.
-
     Attributes:
         num_layers: Number of ViSNet layers. Default is 2.
         num_channels: The number of channels. Default is 256.
-        vec_channels: The number of channels used for the equivariant vector
-            features (``latent_vectors`` / ``embedding_vectors``), independent
-            of ``num_channels``. If `None` (default), it is set equal to
-            `num_channels`, matching the original ViSNet architecture's
-            shapes. Setting this lower than `num_channels` reduces the size of
-            the `[*, irrep_dim, vec_channels]` tensors that dominate the cost
-            of each layer.
-        fuse_projections: Whether to fuse same-input `Dense` projections
-            (q/k/v, dk/dv/f, w_src/w_trg) into single matmuls followed by a
-            split. This is mathematically equivalent to using separate
-            projections but reduces the number of matmul kernel launches per
-            layer. Default is `True`.
         l_max: Highest harmonic order included in the Spherical Harmonics series.
                Default is 2.
         num_heads: Number of heads in the attention block. Default is 8.
@@ -98,8 +71,6 @@ class VisnetConfig(MLIPNetworkConfig):
 
     num_layers: PositiveInt = 4
     num_channels: PositiveInt = 256
-    vec_channels: PositiveInt | None = None
-    fuse_projections: bool = True
     l_max: NonNegativeInt = 2
     num_heads: PositiveInt = 8
     num_rbf: PositiveInt = 32

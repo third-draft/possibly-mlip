@@ -3,7 +3,7 @@ import jax
 import jax.numpy as jnp
 
 from mlip.graph import Graph, GraphEdges, GraphGlobals, GraphNodes
-from mlip.models.visnet.layer import VisnetLayer
+from mlip.models.visnet_old.layer import VisnetLayer
 from mlip.models_v1.visnet.models import VisnetLayer as VisnetLayerV1
 
 

@@ -23,7 +23,7 @@ from flax.linen import initializers
 from mlip.graph import Graph
 from mlip.models.options import parse_activation
 from mlip.models.radial_embedding import cosine_cutoff
-from mlip.models.visnet.visnet_helpers import (
+from mlip.models.visnet_old.visnet_helpers import (
     LAYER_NORM_EPSILON,
     VEC_LAYER_NORM_EPSILON,
     VecLayerNorm,
@@ -39,43 +39,26 @@ class VisnetLayer(nn.Module):
     supporting both scalar and vector features and including various normalization
     and activation options as configured.
 
-    Relative to ``mlip.models.visnet_old.layer.VisnetLayer``, this version:
-
-    - Allows the equivariant vector-feature channel width (``vec_channels``) to
-      differ from the scalar channel width (``num_channels``). The
-      rotation-invariant scalars derived from the vector pathway (``vec_dot``,
-      ``w_dot``, both of width ``vec_channels``) are projected to
-      ``num_channels`` via dedicated ``Dense`` layers (``vec_dot_proj``,
-      ``w_dot_proj``) before being combined with the scalar pathway.
-    - Optionally fuses same-input ``Dense`` projections (q/k/v, dk/dv/f,
-      w_src/w_trg) into single matmuls followed by a split
-      (``fuse_projections``).
-
     Attributes:
         num_heads: Number of attention heads.
-        num_channels: Number of channels in the scalar input and output features.
-        vec_channels: Number of channels in the equivariant vector features.
+        num_channels: Number of channels in the input and output features.
         activation: Activation function.
         attn_activation: Activation function for the attention heads.
         graph_cutoff_angstrom: Cutoff radius.
         vecnorm_type: Type of vector normalization to apply.
         last_layer: Whether this is the last layer of the network.
         l_max: Highest harmonic order included in the Spherical Harmonics series.
-        fuse_projections: Whether to fuse same-input Dense projections into single
-            matmuls followed by a split.
         deterministic_scatter_ops: Whether to use deterministic scatter operations.
     """
 
     num_heads: int
     num_channels: int
-    vec_channels: int
     activation: str
     attn_activation: str
     graph_cutoff_angstrom: float
     vecnorm_type: str
     last_layer: bool
     l_max: int  # Required for input shape assertions.
-    fuse_projections: bool = True
     deterministic_scatter_ops: bool = False
 
     def setup(self) -> None:
@@ -89,7 +72,7 @@ class VisnetLayer(nn.Module):
 
         self.layernorm = nn.LayerNorm(epsilon=LAYER_NORM_EPSILON)
         self.vec_layernorm = VecLayerNorm(
-            num_channels=self.vec_channels,
+            num_channels=self.num_channels,
             norm_type=self.vecnorm_type,
             eps=VEC_LAYER_NORM_EPSILON,
         )
@@ -100,90 +83,58 @@ class VisnetLayer(nn.Module):
         )
 
         self.vec_proj = nn.Dense(
-            features=self.vec_channels * 3,
+            features=self.num_channels * 3,
             use_bias=False,
             kernel_init=initializers.xavier_uniform(),
         )
-
-        if self.fuse_projections:
-            self.qkv_proj = nn.Dense(
-                features=self.num_channels * 3,
-                kernel_init=initializers.xavier_uniform(),
-                bias_init=initializers.zeros_init(),
-            )
-            self.dkv_proj = nn.Dense(
-                features=self.num_channels * (2 if self.last_layer else 3),
-                kernel_init=initializers.xavier_uniform(),
-                bias_init=initializers.zeros_init(),
-            )
-        else:
-            self.q_proj = nn.Dense(
-                features=self.num_channels,
-                kernel_init=initializers.xavier_uniform(),
-                bias_init=initializers.zeros_init(),
-            )
-            self.k_proj = nn.Dense(
-                features=self.num_channels,
-                kernel_init=initializers.xavier_uniform(),
-                bias_init=initializers.zeros_init(),
-            )
-            self.v_proj = nn.Dense(
-                features=self.num_channels,
-                kernel_init=initializers.xavier_uniform(),
-                bias_init=initializers.zeros_init(),
-            )
-            self.dk_proj = nn.Dense(
-                features=self.num_channels,
-                kernel_init=initializers.xavier_uniform(),
-                bias_init=initializers.zeros_init(),
-            )
-            self.dv_proj = nn.Dense(
-                features=self.num_channels,
-                kernel_init=initializers.xavier_uniform(),
-                bias_init=initializers.zeros_init(),
-            )
-            if not self.last_layer:
-                self.f_proj = nn.Dense(
-                    features=self.num_channels,
-                    kernel_init=initializers.xavier_uniform(),
-                    bias_init=initializers.zeros_init(),
-                )
-
+        self.q_proj = nn.Dense(
+            features=self.num_channels,
+            kernel_init=initializers.xavier_uniform(),
+            bias_init=initializers.zeros_init(),
+        )
+        self.k_proj = nn.Dense(
+            features=self.num_channels,
+            kernel_init=initializers.xavier_uniform(),
+            bias_init=initializers.zeros_init(),
+        )
+        self.v_proj = nn.Dense(
+            features=self.num_channels,
+            kernel_init=initializers.xavier_uniform(),
+            bias_init=initializers.zeros_init(),
+        )
+        self.dk_proj = nn.Dense(
+            features=self.num_channels,
+            kernel_init=initializers.xavier_uniform(),
+            bias_init=initializers.zeros_init(),
+        )
+        self.dv_proj = nn.Dense(
+            features=self.num_channels,
+            kernel_init=initializers.xavier_uniform(),
+            bias_init=initializers.zeros_init(),
+        )
         self.s_proj = nn.Dense(
-            features=self.vec_channels * 2,
+            features=self.num_channels * 2,
             kernel_init=initializers.xavier_uniform(),
             bias_init=initializers.zeros_init(),
         )
         self.o_proj = nn.Dense(
-            features=self.vec_channels + self.num_channels * 2,
+            features=self.num_channels * 3,
             kernel_init=initializers.xavier_uniform(),
             bias_init=initializers.zeros_init(),
         )
-        self.vec_dot_proj = nn.Dense(
-            features=self.num_channels,
-            use_bias=False,
-            kernel_init=initializers.xavier_uniform(),
-        )
 
         if not self.last_layer:
-            if self.fuse_projections:
-                self.w_src_trg_proj = nn.Dense(
-                    features=self.vec_channels * 2,
-                    use_bias=False,
-                    kernel_init=initializers.xavier_uniform(),
-                )
-            else:
-                self.w_src_proj = nn.Dense(
-                    features=self.vec_channels,
-                    use_bias=False,
-                    kernel_init=initializers.xavier_uniform(),
-                )
-                self.w_trg_proj = nn.Dense(
-                    features=self.vec_channels,
-                    use_bias=False,
-                    kernel_init=initializers.xavier_uniform(),
-                )
-            self.w_dot_proj = nn.Dense(
+            self.f_proj = nn.Dense(
+                features=self.num_channels,
+                kernel_init=initializers.xavier_uniform(),
+                bias_init=initializers.zeros_init(),
+            )
+            self.w_src_proj = nn.Dense(
+                features=self.num_channels,
+                use_bias=False,
+                kernel_init=initializers.xavier_uniform(),
+            )
+            self.w_trg_proj = nn.Dense(
                 features=self.num_channels,
                 use_bias=False,
                 kernel_init=initializers.xavier_uniform(),
@@ -208,7 +159,7 @@ class VisnetLayer(nn.Module):
         assert vector_feats.ndim == 3
         irrep_dim = ((self.l_max + 1) ** 2) - 1
         assert vector_feats.shape[1] == irrep_dim
-        assert vector_feats.shape[2] == self.vec_channels
+        assert vector_feats.shape[2] == self.num_channels
         assert graph.edges.features["distances"].ndim == 1
         assert graph.edges.features["spherical_embedding"].ndim == 2
         assert graph.edges.features["spherical_embedding"].shape[1] == irrep_dim
@@ -230,18 +181,19 @@ class VisnetLayer(nn.Module):
         v_j = v_j * dv
         v_j = (v_j * jnp.expand_dims(attn, 2)).reshape(-1, self.num_channels)
 
-        s1, s2 = jnp.split(self.act(self.s_proj(v_j)), [self.vec_channels], axis=1)
+        s1, s2 = jnp.split(self.act(self.s_proj(v_j)), [self.num_channels], axis=1)
         vec_j = vec_j * jnp.expand_dims(s1, 1) + jnp.expand_dims(
             s2, 1
         ) * jnp.expand_dims(spherical_feats, 2)
 
         return v_j, vec_j
 
-    def _edge_update_w_dot(
+    def _edge_update(
         self,
         vec_i_proj: jax.Array,
         vec_j_proj: jax.Array,
         d_ij: jax.Array,
+        f_ij: jax.Array,
     ) -> jax.Array:
         # w_dot = sum_l w1[l] * w2[l], where w1 = reject(vec_i_proj, d_ij) and
         # w2 = reject(vec_j_proj, -d_ij). Expanding the rejections and using
@@ -249,14 +201,17 @@ class VisnetLayer(nn.Module):
         #   w_dot = <a, b> + <a, s> * <b, s> * (|s|^2 - 2)
         # where a = vec_i_proj, b = vec_j_proj, s = d_ij, and <., .> denotes a
         # dot product over the irrep axis. This avoids materializing the
-        # [n_edges, irrep_dim, vec_channels] rejection vectors w1 and w2.
+        # [n_edges, irrep_dim, num_channels] rejection vectors w1 and w2.
         a, b, s = vec_i_proj, vec_j_proj, d_ij
         s_expanded = jnp.expand_dims(s, 2)
         a_dot_b = (a * b).sum(axis=1)
         a_dot_s = (a * s_expanded).sum(axis=1)
         b_dot_s = (b * s_expanded).sum(axis=1)
         s_norm_sq = (s**2).sum(axis=1, keepdims=True)
-        return a_dot_b + a_dot_s * b_dot_s * (s_norm_sq - 2.0)
+        w_dot = a_dot_b + a_dot_s * b_dot_s * (s_norm_sq - 2.0)
+
+        df_ij = self.act(self.f_proj(f_ij)) * w_dot
+        return df_ij
 
     def __call__(self, graph: Graph) -> Graph:
         """Applies the VisnetLayer module to an input Graph and returns a Graph.
@@ -303,29 +258,11 @@ class VisnetLayer(nn.Module):
         node_feats = self.layernorm(node_feats)
         vector_feats = self.vec_layernorm(vector_feats)
 
-        if self.fuse_projections:
-            qkv_split_indices = np.cumsum([self.num_channels] * 2)
-            q_feats, k_feats, v_feats = jnp.split(
-                self.qkv_proj(node_feats), qkv_split_indices, axis=-1
-            )
-            if self.last_layer:
-                dk_feats, dv_feats = jnp.split(
-                    self.dkv_proj(edge_feats), [self.num_channels], axis=-1
-                )
-                f_ij_feats = None
-            else:
-                dkv_split_indices = np.cumsum([self.num_channels] * 2)
-                dk_feats, dv_feats, f_ij_feats = jnp.split(
-                    self.dkv_proj(edge_feats), dkv_split_indices, axis=-1
-                )
-        else:
-            q_feats = self.q_proj(node_feats)
-            k_feats = self.k_proj(node_feats)
-            v_feats = self.v_proj(node_feats)
-            dk_feats = self.dk_proj(edge_feats)
-            dv_feats = self.dv_proj(edge_feats)
-            f_ij_feats = None if self.last_layer else self.f_proj(edge_feats)
-
+        q_feats = self.q_proj(node_feats)  # Correspond to Wq weights in the paper
+        k_feats = self.k_proj(node_feats)  # Correspond to Wk weights in the paper
+        v_feats = self.v_proj(node_feats)  # Correspond to Wv weights in the paper
+        dk_feats = self.dk_proj(edge_feats)  # Correspond to Dk weights in the paper
+        dv_feats = self.dv_proj(edge_feats)  # Correspond to Dv weights in the paper
         # Reshape the outputs to include the num_heads dimension
         q_feats = jnp.reshape(q_feats, (-1, self.num_heads, self.head_dim))
         k_feats = jnp.reshape(k_feats, (-1, self.num_heads, self.head_dim))
@@ -334,8 +271,11 @@ class VisnetLayer(nn.Module):
         dv_feats = jnp.reshape(self.act(dv_feats), (-1, self.num_heads, self.head_dim))
 
         projected_vec = self.vec_proj(vector_feats)
-        vec_split_indices = np.cumsum([self.vec_channels] * 2)
-        vec1, vec2, vec3 = jnp.split(projected_vec, vec_split_indices, axis=-1)
+        split_sizes = [self.num_channels] * 3
+        # we use numpy (instead of jax) here to ensure split_sizes is static
+        # and not a tracer
+        split_indices = np.cumsum(np.array(split_sizes[:-1]))
+        vec1, vec2, vec3 = jnp.split(projected_vec, split_indices, axis=-1)
         vec_dot = jnp.sum(vec1 * vec2, axis=1)
 
         # Apply message function for each edge
@@ -368,10 +308,9 @@ class VisnetLayer(nn.Module):
             deterministic=self.deterministic_scatter_ops,
         )
 
-        o_split_indices = np.cumsum([self.vec_channels, self.num_channels])
-        o1, o2, o3 = jnp.split(self.o_proj(node_feats), o_split_indices, axis=1)
+        o1, o2, o3 = jnp.split(self.o_proj(node_feats), split_indices, axis=1)
 
-        dx = self.vec_dot_proj(vec_dot) * o2 + o3
+        dx = vec_dot * o2 + o3
         dvec = vec3 * jnp.expand_dims(o1, 1) + vec_out
 
         if not self.last_layer:
@@ -379,20 +318,14 @@ class VisnetLayer(nn.Module):
             # commutes with gathering node features onto edges. Apply them once
             # per node (and gather afterwards) instead of once per edge, since
             # num_edges is typically much larger than num_nodes.
-            if self.fuse_projections:
-                vector_feats_trg, vector_feats_src = jnp.split(
-                    self.w_src_trg_proj(vector_feats), [self.vec_channels], axis=-1
-                )
-            else:
-                vector_feats_trg = self.w_trg_proj(vector_feats)
-                vector_feats_src = self.w_src_proj(vector_feats)
-
-            w_dot = self._edge_update_w_dot(
+            vector_feats_trg = self.w_trg_proj(vector_feats)
+            vector_feats_src = self.w_src_proj(vector_feats)
+            df_ij = self._edge_update(
                 vector_feats_trg[graph.receivers, :],
                 vector_feats_src[graph.senders, :],
                 graph.edges.features["spherical_embedding"],
+                edge_feats,
             )
-            df_ij = self.act(f_ij_feats) * self.w_dot_proj(w_dot)
         else:
             df_ij = jnp.zeros_like(edge_feats)
 

@@ -18,3 +18,6 @@ from mlip.models.inference_context import InferenceContext
 from mlip.models.mace.network import Mace
 from mlip.models.nequip.network import Nequip
 from mlip.models.visnet.network import Visnet
+from mlip.models.visnet.config import VisnetConfig
+from mlip.models.visnet_old.network import Visnet as VisnetOld
+from mlip.models.visnet_old.config import VisnetConfig as VisnetOldConfig

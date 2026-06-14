@@ -27,23 +27,15 @@ from mlip.models.charge_utils import correct_partial_charge_feature
 from mlip.models.mlip_network import MLIPNetwork
 from mlip.models.options import parse_activation
 from mlip.models.readout import select_head
-from mlip.models.visnet.blocks import VisnetEmbeddingBlock, VisnetMultiHeadReadoutBlock
-from mlip.models.visnet.config import VisnetConfig
-from mlip.models.visnet.layer import VisnetLayer
+from mlip.models.visnet_old.blocks import VisnetEmbeddingBlock, VisnetMultiHeadReadoutBlock
+from mlip.models.visnet_old.config import VisnetConfig
+from mlip.models.visnet_old.layer import VisnetLayer
 from mlip.typing.properties import Properties
 
 
 class Visnet(MLIPNetwork):
     """The ViSNet model flax module. It is derived from the
     :class:`~mlip.models.mlip_network.MLIPNetwork` class.
-
-    This is a variant of the original ViSNet architecture (see
-    :class:`~mlip.models.visnet_old.network.Visnet`) that decouples the
-    equivariant vector-feature channel width from the scalar channel width
-    and optionally fuses several same-input projections, see
-    :class:`~mlip.models.visnet.config.VisnetConfig`. Its parameters are not
-    interchangeable with checkpoints trained for
-    :class:`~mlip.models.visnet_old.network.Visnet`.
 
     References:
         * Yusong Wang, Tong Wang, Shaoning Li, Xinheng He, Mingyu Li, Zun Wang,
@@ -55,7 +47,7 @@ class Visnet(MLIPNetwork):
 
     Attributes:
         config: Hyperparameters / configuration for the ViSNet model, see
-                :class:`~mlip.models.visnet.config.VisnetConfig`.
+                :class:`~mlip.models.visnet_old.config.VisnetConfig`.
         dataset_info: Hyperparameters dictated by the dataset
                       (e.g., cutoff radius or average number of neighbors).
         available_properties: Model available properties,
@@ -85,8 +77,6 @@ class Visnet(MLIPNetwork):
             f"attention heads ({self.config.num_heads})"
         )
 
-        vec_channels = self.config.vec_channels or self.config.num_channels
-
         num_species = self.config.num_species
         if num_species is None:
             num_species = len(self.dataset_info.allowed_atomic_numbers)
@@ -110,7 +100,6 @@ class Visnet(MLIPNetwork):
         self.embedding_block = VisnetEmbeddingBlock(
             l_max=self.config.l_max,
             num_channels=self.config.num_channels,
-            vec_channels=vec_channels,
             num_rbf=self.config.num_rbf,
             radial_basis=self.config.radial_basis,
             trainable_rbf=self.config.trainable_rbf,
@@ -130,14 +119,12 @@ class Visnet(MLIPNetwork):
             layer_cls(
                 num_heads=self.config.num_heads,
                 num_channels=self.config.num_channels,
-                vec_channels=vec_channels,
                 activation=self.config.activation,
                 attn_activation=self.config.attn_activation,
                 graph_cutoff_angstrom=self.dataset_info.graph_cutoff_angstrom,
                 vecnorm_type=self.config.vecnorm_type,
                 last_layer=i == self.config.num_layers - 1,
                 l_max=self.config.l_max,
-                fuse_projections=self.config.fuse_projections,
                 deterministic_scatter_ops=self.config.deterministic_scatter_ops,
             )
             for i in range(self.config.num_layers)
@@ -146,7 +133,6 @@ class Visnet(MLIPNetwork):
         self.readout_block = VisnetMultiHeadReadoutBlock(
             num_heads=self.config.num_readout_heads,
             num_channels=self.config.num_channels,
-            vec_channels=vec_channels,
             activation=self.config.activation,
             vecnorm_type=self.config.vecnorm_type,
             l_max=self.config.l_max,
