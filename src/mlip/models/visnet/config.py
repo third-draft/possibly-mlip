@@ -94,6 +94,12 @@ class VisnetConfig(MLIPNetworkConfig):
             (roughly 2x) at the cost of additional compute (roughly 10-15% slower).
             Recommended for large systems where memory is the limiting factor.
             Default is `False`.
+        correlation: Correlation order of the equivariant many-body
+            self-interaction (MACE-style symmetric contraction) applied to the
+            aggregated vector messages in each layer, see
+            :class:`~mlip.models.visnet.self_interaction.VisnetSelfInteractionBlock`.
+            If `0` (default), this self-interaction is disabled and the model
+            is unchanged from the base architecture.
     """
 
     num_layers: PositiveInt = 4
@@ -116,6 +122,7 @@ class VisnetConfig(MLIPNetworkConfig):
     embed_activation: Activation = Activation.SILU
     deterministic_scatter_ops: bool = False
     use_gradient_checkpointing: bool = False
+    correlation: int = 0
 
     @model_validator(mode="after")
     def _enforce_partial_charges_for_coulomb_term(self) -> Self:

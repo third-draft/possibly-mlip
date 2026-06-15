@@ -23,6 +23,7 @@ from flax.linen import initializers
 from mlip.graph import Graph
 from mlip.models.options import parse_activation
 from mlip.models.radial_embedding import cosine_cutoff
+from mlip.models.visnet.self_interaction import VisnetSelfInteractionBlock
 from mlip.models.visnet.visnet_helpers import (
     LAYER_NORM_EPSILON,
     VEC_LAYER_NORM_EPSILON,
@@ -64,6 +65,13 @@ class VisnetLayer(nn.Module):
         fuse_projections: Whether to fuse same-input Dense projections into single
             matmuls followed by a split.
         deterministic_scatter_ops: Whether to use deterministic scatter operations.
+        correlation: Correlation order of the equivariant many-body
+            self-interaction applied to the aggregated scalar and vector
+            messages (``node_feats`` and ``vec_out``), see
+            :class:`~mlip.models.visnet.self_interaction.VisnetSelfInteractionBlock`.
+            If `0` (default), the self-interaction block is disabled.
+        num_species: Number of atomic species. Only used (and required to be
+            accurate) when ``correlation > 0``.
     """
 
     num_heads: int
@@ -77,6 +85,8 @@ class VisnetLayer(nn.Module):
     l_max: int  # Required for input shape assertions.
     fuse_projections: bool = True
     deterministic_scatter_ops: bool = False
+    correlation: int = 0
+    num_species: int = 1
 
     def setup(self) -> None:
         """Initializes the VisnetLayer module."""
@@ -184,6 +194,23 @@ class VisnetLayer(nn.Module):
                     kernel_init=initializers.xavier_uniform(),
                 )
             self.w_dot_proj = nn.Dense(
+                features=self.num_channels,
+                use_bias=False,
+                kernel_init=initializers.xavier_uniform(),
+            )
+
+        if self.correlation > 0:
+            self.self_interaction = VisnetSelfInteractionBlock(
+                vec_channels=self.vec_channels,
+                l_max=self.l_max,
+                correlation=self.correlation,
+                num_species=self.num_species,
+            )
+            self.self_interaction_node_proj = nn.Dense(
+                features=self.vec_channels,
+                kernel_init=initializers.xavier_uniform(),
+            )
+            self.self_interaction_scalar_proj = nn.Dense(
                 features=self.num_channels,
                 use_bias=False,
                 kernel_init=initializers.xavier_uniform(),
@@ -367,6 +394,15 @@ class VisnetLayer(nn.Module):
             num_segments=node_feats.shape[0],
             deterministic=self.deterministic_scatter_ops,
         )
+
+        if self.correlation > 0:
+            si_scalars, si_vectors = self.self_interaction(
+                self.self_interaction_node_proj(node_feats),
+                vec_out,
+                graph.nodes.features["species"],
+            )
+            node_feats = node_feats + self.self_interaction_scalar_proj(si_scalars)
+            vec_out = vec_out + si_vectors
 
         o_split_indices = np.cumsum([self.vec_channels, self.num_channels])
         o1, o2, o3 = jnp.split(self.o_proj(node_feats), o_split_indices, axis=1)

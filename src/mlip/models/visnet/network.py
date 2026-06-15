@@ -139,6 +139,8 @@ class Visnet(MLIPNetwork):
                 l_max=self.config.l_max,
                 fuse_projections=self.config.fuse_projections,
                 deterministic_scatter_ops=self.config.deterministic_scatter_ops,
+                correlation=self.config.correlation,
+                num_species=num_species,
             )
             for i in range(self.config.num_layers)
         ]
