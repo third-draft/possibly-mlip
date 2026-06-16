@@ -457,6 +457,60 @@ class VisnetMultiHeadReadoutBlock(nn.Module):
         return node_feats
 
 
+class RelaxedEquivarianceBlock(nn.Module):
+    """Breaks SO(3) equivariance via a learned irrep-component mixing,
+    weighted by an annealing schedule.
+
+    A linear map over the irrep_dim axis (weights shared across all nodes
+    and channels) is applied to the vector features and blended in with
+    amplitude ``beta`` (read from ``graph.globals.features["relaxed_equiv_weight"]``,
+    defaulting to 0.0 when absent so inference is fully equivariant).
+
+    Zero-initialized so the block is an exact no-op at the start of
+    training regardless of beta; as beta is annealed to 0 the model
+    recovers full equivariance.
+
+    Attributes:
+        l_max: Highest harmonic order; determines ``irrep_dim = (l_max + 1)^2 - 1``.
+    """
+
+    l_max: int
+
+    def setup(self) -> None:
+        """Initializes the irrep-component mixing layer."""
+        irrep_dim = (self.l_max + 1) ** 2 - 1
+        # No bias: a constant offset in irrep space would encode a fixed
+        # preferred direction, introducing a global-frame artifact.
+        self.irrep_mixer = nn.Dense(
+            irrep_dim,
+            use_bias=False,
+            kernel_init=initializers.zeros_init(),
+        )
+
+    def __call__(self, vector_feats: jax.Array, beta: jax.Array) -> jax.Array:
+        """Applies the non-equivariant irrep-mixing perturbation.
+
+        Args:
+            vector_feats: ``[n_nodes, irrep_dim, num_channels]``
+            beta: Scalar blend weight (0 = no perturbation, 1 = full).
+
+        Returns:
+            Perturbed vector features of the same shape.
+        """
+        # stop_gradient on the mixer input cuts the cross-partial
+        # d²_energy/(d_positions × d_kernel) that arises when forces are
+        # computed as jax.grad(energy)(positions).  Without it, even a
+        # zero-init kernel produces large second-order updates through the
+        # force-loss backward pass, causing divergence.  With it, the kernel
+        # learns purely additive corrections; gradients flow back through
+        # `vector_feats` only via the identity path (coefficient 1), giving
+        # stable first-order updates.
+        vt = jax.lax.stop_gradient(vector_feats).transpose(0, 2, 1)
+        mixed = self.irrep_mixer(vt)           # [n_nodes, num_channels, irrep_dim]
+        delta = mixed.transpose(0, 2, 1)       # [n_nodes, irrep_dim, num_channels]
+        return vector_feats + beta * delta
+
+
 class GatedEquivariantBlock(nn.Module):
     """Applies the gated equivariant block to update node features using vector
     features.

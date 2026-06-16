@@ -382,6 +382,14 @@ def partial_charges_visnet_force_field(visnet_config, dataset_info):
 
 
 @pytest.fixture(scope="session")
+def relaxed_equivariance_visnet_force_field(visnet_config, dataset_info):
+    relaxed_config = visnet_config.model_copy(update={"relaxed_equivariance": True})
+    visnet_model = Visnet(relaxed_config, dataset_info)
+    visnet_ff = ForceField.from_mlip_network(visnet_model, seed=42)
+    return ForceField(visnet_ff.predictor, visnet_ff.params)
+
+
+@pytest.fixture(scope="session")
 def lri_visnet_force_field(visnet_config, dataset_info):
     lri_config = visnet_config.model_copy(
         update={"predict_partial_charges": True, "use_coulomb_term": True}

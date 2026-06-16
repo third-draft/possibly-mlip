@@ -126,6 +126,7 @@ class Visnet(MLIPNetwork):
                 last_layer=i == self.config.num_layers - 1,
                 l_max=self.config.l_max,
                 deterministic_scatter_ops=self.config.deterministic_scatter_ops,
+                relaxed_equivariance=self.config.relaxed_equivariance,
             )
             for i in range(self.config.num_layers)
         ]

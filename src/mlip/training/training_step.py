@@ -109,6 +109,7 @@ def make_train_step(
     should_parallelize: bool = False,
     in_shardings: Union[NamedSharding, tuple[NamedSharding, ...]] | None = None,
     out_shardings: Union[NamedSharding, tuple[NamedSharding, ...]] | None = None,
+    relaxed_equiv_schedule: Callable[[int], float] | None = None,
 ) -> Callable:
     """Create a training step function to optimize model params using gradients.
 
@@ -126,6 +127,14 @@ def make_train_step(
                                          Defaults to 1, implying immediate updates.
         in_shardings: Optional in_shardings for `jax.jit`.
         out_shardings: Optional out_shardings for `jax.jit`.
+        relaxed_equiv_schedule: Optional schedule mapping epoch number to a
+                                scalar weight ``beta`` for the
+                                :class:`~mlip.models.visnet.blocks.RelaxedEquivarianceBlock`.
+                                When provided, ``beta = relaxed_equiv_schedule(epoch)``
+                                is injected into every training batch via
+                                ``graph.globals.features["relaxed_equiv_weight"]``
+                                before calling ``predictor.apply``. Defaults to
+                                ``None`` (feature disabled).
 
     Returns:
         A function that takes the current training state and a batch of data as
@@ -135,6 +144,9 @@ def make_train_step(
     def model_loss(
         params: ModelParameters, ref_graph: Graph, epoch: int
     ) -> tuple[Array, dict[str, Array]]:
+        if relaxed_equiv_schedule is not None:
+            beta = relaxed_equiv_schedule(epoch)
+            ref_graph = ref_graph.update_global_features(relaxed_equiv_weight=beta)
         predictions = predictor.apply(params, ref_graph)
         return loss_fun(predictions, ref_graph, epoch)
 

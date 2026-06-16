@@ -87,6 +87,7 @@ class VisnetConfig(MLIPNetworkConfig):
     embed_activation: Activation = Activation.SILU
     deterministic_scatter_ops: bool = False
     use_gradient_checkpointing: bool = False
+    relaxed_equivariance: bool = False
 
     @model_validator(mode="after")
     def _enforce_partial_charges_for_coulomb_term(self) -> Self:

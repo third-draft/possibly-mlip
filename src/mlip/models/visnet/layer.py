@@ -23,6 +23,7 @@ from flax.linen import initializers
 from mlip.graph import Graph
 from mlip.models.options import parse_activation
 from mlip.models.radial_embedding import cosine_cutoff
+from mlip.models.visnet.blocks import RelaxedEquivarianceBlock
 from mlip.models.visnet.visnet_helpers import (
     LAYER_NORM_EPSILON,
     VEC_LAYER_NORM_EPSILON,
@@ -60,6 +61,7 @@ class VisnetLayer(nn.Module):
     last_layer: bool
     l_max: int  # Required for input shape assertions.
     deterministic_scatter_ops: bool = False
+    relaxed_equivariance: bool = False
 
     def setup(self) -> None:
         """Initializes the VisnetLayer module."""
@@ -122,6 +124,9 @@ class VisnetLayer(nn.Module):
             kernel_init=initializers.xavier_uniform(),
             bias_init=initializers.zeros_init(),
         )
+
+        if self.relaxed_equivariance:
+            self.relaxed_equiv_block = RelaxedEquivarianceBlock(l_max=self.l_max)
 
         if not self.last_layer:
             self.f_proj = nn.Dense(
@@ -312,6 +317,10 @@ class VisnetLayer(nn.Module):
 
         dx = vec_dot * o2 + o3
         dvec = vec3 * jnp.expand_dims(o1, 1) + vec_out
+
+        if self.relaxed_equivariance:
+            beta = graph.globals.features.get("relaxed_equiv_weight", 0.0)
+            dvec = self.relaxed_equiv_block(dvec, beta)
 
         if not self.last_layer:
             # w_trg_proj/w_src_proj are linear maps over the channel axis, which

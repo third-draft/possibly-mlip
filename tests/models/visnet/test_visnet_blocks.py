@@ -5,6 +5,7 @@ import jax.numpy as jnp
 from mlip.graph import Graph, GraphEdges, GraphGlobals, GraphNodes
 from mlip.models.blocks import SphericalHarmonicsBlock
 from mlip.models.visnet.blocks import (
+    RelaxedEquivarianceBlock,
     VisnetEdgeEmbeddingBlock,
     VisnetEmbeddingBlock,
     VisnetMultiHeadReadoutBlock,
@@ -267,6 +268,50 @@ class TestVisnetBlocks:
 
         # Output shape assertions
         assert graph.nodes.features["outputs"].shape == (self.n_nodes, 2, 1)
+
+
+def test_relaxed_equivariance_block_zero_init_is_noop():
+    key = jax.random.PRNGKey(0)
+    l_max = 2
+    irrep_dim = (l_max + 1) ** 2 - 1
+    n_nodes, num_channels = 5, 8
+    vector_feats = jax.random.normal(key, (n_nodes, irrep_dim, num_channels))
+
+    block = RelaxedEquivarianceBlock(l_max=l_max)
+    params = block.init(key, vector_feats, beta=1.0)
+
+    # Zero-initialized kernel: output == input for any beta
+    out = block.apply(params, vector_feats, beta=1.0)
+    assert jnp.allclose(out, vector_feats, atol=1e-6)
+
+    # beta=0 is always a no-op regardless of kernel values
+    params_random = jax.tree.map(
+        lambda p: jax.random.normal(key, p.shape), params
+    )
+    out_zero_beta = block.apply(params_random, vector_feats, beta=0.0)
+    assert jnp.allclose(out_zero_beta, vector_feats, atol=1e-6)
+
+
+def test_relaxed_equivariance_block_breaks_equivariance():
+    key = jax.random.PRNGKey(1)
+    l_max = 2
+    irrep_dim = (l_max + 1) ** 2 - 1
+    n_nodes, num_channels = 4, 8
+    vector_feats = jax.random.normal(key, (n_nodes, irrep_dim, num_channels))
+
+    block = RelaxedEquivarianceBlock(l_max=l_max)
+    # Give the kernel non-zero values to activate the block
+    params = jax.tree.map(
+        lambda p: jax.random.normal(key, p.shape) * 0.1,
+        block.init(key, vector_feats, beta=1.0),
+    )
+    # Permute irrep_dim components — equivariant op would commute, non-equivariant won't
+    perm = jnp.array([2, 0, 1, 7, 3, 4, 5, 6])  # arbitrary permutation of 8 components
+    out_original = block.apply(params, vector_feats, beta=1.0)
+    out_permuted_input = block.apply(params, vector_feats[:, perm, :], beta=1.0)
+    # If the block were equivariant, out_permuted_input == out_original[:, perm, :]
+    # With a learned irrep mixer this does NOT hold (the map is not equivariant)
+    assert not jnp.allclose(out_permuted_input, out_original[:, perm, :], atol=1e-5)
 
 
 def test_visnet_spherical_harmonics_v1_against_v2():

@@ -170,3 +170,111 @@ class TestVisnetLayer:
         )
         vector_feats_rot = vmap_rot_matrix_over_channels(out_vector_feats)
         assert jnp.allclose(out_vector_feats_rot, vector_feats_rot, atol=1e-6)
+
+
+class TestVisnetLayerRelaxedEquivariance:
+    """Tests for VisnetLayer with relaxed_equivariance=True."""
+
+    l_max = 2
+    num_heads = 2
+    num_channels = 6
+    num_rbf = 4
+    activation = "relu"
+    attn_activation = "sigmoid"
+    graph_cutoff_angstrom = 5.0
+    vecnorm_type = "none"
+    key = jax.random.PRNGKey(42)
+
+    def _make_graph(self):
+        n_nodes, n_edges = 8, 30
+        irrep_dim = (self.l_max + 1) ** 2 - 1
+        senders = jax.random.randint(self.key, (n_edges,), 0, n_nodes)
+        receivers = jax.random.randint(self.key, (n_edges,), 0, n_nodes)
+        graph = Graph(
+            nodes=GraphNodes(positions=None, features={}),
+            edges=GraphEdges(features={}),
+            globals=GraphGlobals(cell=None, weight=None),
+            senders=senders,
+            receivers=receivers,
+            n_node=None,
+            n_edge=None,
+        )
+        graph = graph.update_node_features(
+            latent_scalars=jnp.ones((n_nodes, self.num_channels)),
+            latent_vectors=jnp.zeros((n_nodes, irrep_dim, self.num_channels)),
+        )
+        graph = graph.update_edge_features(
+            latent=jnp.ones((n_edges, self.num_channels)),
+            distances=jnp.ones((n_edges,)),
+            spherical_embedding=jnp.ones((n_edges, irrep_dim)),
+        )
+        return graph
+
+    def _make_layer(self, relaxed_equivariance: bool) -> VisnetLayer:
+        return VisnetLayer(
+            num_heads=self.num_heads,
+            num_channels=self.num_channels,
+            activation=self.activation,
+            attn_activation=self.attn_activation,
+            graph_cutoff_angstrom=self.graph_cutoff_angstrom,
+            vecnorm_type=self.vecnorm_type,
+            last_layer=False,
+            l_max=self.l_max,
+            relaxed_equivariance=relaxed_equivariance,
+        )
+
+    def test_layer_with_relaxed_equivariance_produces_finite_output(self):
+        graph = self._make_graph()
+        graph = graph.update_global_features(relaxed_equiv_weight=0.05)
+        layer = self._make_layer(relaxed_equivariance=True)
+        params = layer.init(self.key, graph)
+        out = jax.jit(layer.apply)(params, graph)
+        assert jnp.all(jnp.isfinite(out.nodes.features["latent_scalars"]))
+        assert jnp.all(jnp.isfinite(out.nodes.features["latent_vectors"]))
+
+    def test_layer_with_beta_zero_matches_equivariant_baseline(self):
+        """With beta=0 the relaxed block is a no-op: outputs match standard layer."""
+        graph = self._make_graph()
+        standard = self._make_layer(relaxed_equivariance=False)
+        relaxed = self._make_layer(relaxed_equivariance=True)
+
+        params_std = standard.init(self.key, graph)
+        # Build matching params for the relaxed layer by sharing the
+        # equivariant sub-tree and zero-initialising the relaxed block.
+        params_rel = relaxed.init(self.key, graph)
+
+        # Inject beta=0 — the block becomes an exact identity regardless of kernel.
+        graph_beta0 = graph.update_global_features(relaxed_equiv_weight=0.0)
+
+        out_std = jax.jit(standard.apply)(params_std, graph)
+        out_rel = jax.jit(relaxed.apply)(params_rel, graph_beta0)
+
+        # Both layers are freshly initialized from the same key so share
+        # identical equivariant weights. With beta=0 outputs must agree.
+        assert jnp.allclose(
+            out_std.nodes.features["latent_scalars"],
+            out_rel.nodes.features["latent_scalars"],
+            atol=1e-5,
+        )
+
+    def test_nonzero_beta_changes_vector_output(self):
+        """A non-zero beta with a non-zero kernel changes the vector output."""
+        graph = self._make_graph()
+        layer = self._make_layer(relaxed_equivariance=True)
+        params_zero = layer.init(self.key, graph)
+        # Randomise ALL parameters — the irrep_mixer kernel will be non-zero.
+        params_rand = jax.tree.map(
+            lambda p: jax.random.normal(self.key, p.shape) * 0.1, params_zero
+        )
+
+        out_beta0 = jax.jit(layer.apply)(
+            params_rand, graph.update_global_features(relaxed_equiv_weight=0.0)
+        )
+        out_beta05 = jax.jit(layer.apply)(
+            params_rand, graph.update_global_features(relaxed_equiv_weight=0.05)
+        )
+        assert not jnp.allclose(
+            out_beta0.nodes.features["latent_vectors"],
+            out_beta05.nodes.features["latent_vectors"],
+            atol=1e-6,
+        )

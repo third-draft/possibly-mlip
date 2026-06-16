@@ -24,6 +24,8 @@ import numpy as np
 import optax
 import pytest
 
+import optax
+
 from mlip.data.chemical_systems_readers.extxyz_reader import ExtxyzReader
 from mlip.data.configs import GraphDatasetBuilderConfig
 from mlip.data.graph_dataset import GraphDataset
@@ -33,6 +35,8 @@ from mlip.graph import Graph
 from mlip.models import ForceField
 from mlip.models.loss import HuberLoss, MSELoss
 from mlip.models.params_loading import load_parameters_from_checkpoint
+from mlip.models.visnet.config import VisnetConfig
+from mlip.models.visnet.network import Visnet
 from mlip.training.training_io_handler import LogCategory, TrainingIOHandler
 from mlip.training.training_loop import TrainingLoop
 from mlip.utils.multihost import create_device_mesh
@@ -384,6 +388,60 @@ def test_best_params_saved_correctly(
     # Verify the best model params can be materialized without errors
     leaves, _ = jax.tree.flatten(training_loop.best_model.params)
     assert leaves[0] is not None
+
+
+def test_training_with_relaxed_equiv_schedule(setup_datasets_for_training, tmp_path):
+    """TrainingLoop with relaxed_equiv_schedule injects beta into every batch and
+    completes one epoch without NaN losses."""
+    train_set, valid_set = setup_datasets_for_training
+
+    builder_config = GraphDatasetBuilderConfig(
+        graph_cutoff_angstrom=2.0,
+        use_formation_energies=False,
+        batch_size=4,
+    )
+    builder = GraphDatasetBuilder(
+        {"train": ExtxyzReader(filepaths=SMALL_ASPIRIN_DATASET_PATH.resolve())},
+        builder_config,
+    )
+    builder.get_datasets(prefetch=False)
+    dataset_info = builder.dataset_info
+
+    config = VisnetConfig(num_layers=1, num_channels=8, l_max=1, relaxed_equivariance=True)
+    model = Visnet(config, dataset_info)
+    ff = ForceField.from_mlip_network(model, seed=0)
+
+    beta_schedule = optax.join_schedules(
+        schedules=[
+            optax.constant_schedule(0.05),
+            optax.linear_schedule(init_value=0.05, end_value=0.0, transition_steps=4),
+        ],
+        boundaries=[5],
+    )
+
+    train_losses = []
+
+    def _logger(log_category, to_log, epoch_num):
+        if log_category == LogCategory.TRAIN_METRICS:
+            train_losses.append(float(to_log["loss"]))
+
+    io_handler = TrainingIOHandler(TrainingIOHandler.Config(checkpoint_dir=None))
+    io_handler.attach_logger(_logger)
+
+    training_loop = TrainingLoop(
+        train_dataset=train_set,
+        validation_dataset=valid_set,
+        force_field=ff,
+        loss=MSELoss(lambda x: 1.0, lambda x: 1.0, lambda x: 0),
+        optimizer=optax.adam(learning_rate=1e-3),
+        config=TrainingLoop.Config(num_epochs=1, run_eval_at_start=False),
+        io_handler=io_handler,
+        relaxed_equiv_schedule=beta_schedule,
+    )
+    training_loop.run()
+
+    assert len(train_losses) == 1
+    assert np.isfinite(train_losses[0])
 
 
 def test_graphdataset_multi_device_warning(caplog):

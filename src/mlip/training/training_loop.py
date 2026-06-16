@@ -77,6 +77,7 @@ class TrainingLoop:
         config: TrainingLoopConfig,
         io_handler: TrainingIOHandler | None = None,
         mesh: Mesh | None = None,
+        relaxed_equiv_schedule: Callable[[int], float] | None = None,
     ) -> None:
         """Constructor.
 
@@ -172,6 +173,7 @@ class TrainingLoop:
         self._loss_train = partial(loss, eval_metrics=False)
         self._loss_eval = partial(loss, eval_metrics=True)
 
+        self.relaxed_equiv_schedule = relaxed_equiv_schedule
         self.mesh: Mesh = mesh
         self.replicated_sharding = create_replicated_sharding(self.mesh)
         self.sharded_sharding = create_dp_sharding(self.mesh)
@@ -315,6 +317,7 @@ class TrainingLoop:
             ),
             in_shardings=_in_shardings,
             out_shardings=_out_shardings,
+            relaxed_equiv_schedule=self.relaxed_equiv_schedule,
         )
 
     def _make_evaluation_step(

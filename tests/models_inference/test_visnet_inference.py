@@ -124,6 +124,61 @@ def test_visnet_predicts_partial_charges(
     assert_allclose(pred_total_charge, ref_total_charge, atol=1e-5, rtol=1e-4)
 
 
+def test_visnet_relaxed_equivariance_produces_finite_outputs(
+    setup_system, relaxed_equivariance_visnet_force_field
+):
+    """Visnet with relaxed_equivariance=True should produce finite energy and forces
+    when beta is injected via graph.globals.features."""
+    _, graph = setup_system
+    ff = relaxed_equivariance_visnet_force_field
+    graph_with_beta = graph.update_global_features(relaxed_equiv_weight=0.05)
+    result = jax.jit(ff)(graph_with_beta)
+
+    assert result.energy is not None
+    assert np.all(np.isfinite(result.energy))
+    assert result.forces is not None
+    assert result.forces.shape == (graph.n_node[0], 3)
+    assert np.all(np.isfinite(result.forces))
+
+
+def test_visnet_relaxed_equivariance_beta_zero_is_equivariant(
+    setup_system, relaxed_equivariance_visnet_force_field
+):
+    """With beta=0, RelaxedEquivarianceBlock is a no-op and the model is exactly
+    equivariant: rotating atom positions rotates forces by the same rotation."""
+    import e3nn_jax as e3nn
+
+    _, graph = setup_system
+    ff = relaxed_equivariance_visnet_force_field
+    apply = jax.jit(ff)
+
+    graph_beta0 = graph.update_global_features(relaxed_equiv_weight=0.0)
+    forces = np.array(apply(graph_beta0).forces)
+
+    rot = np.array(e3nn.rand_matrix(jax.random.PRNGKey(7)))
+    graph_rot = graph.replace_nodes(
+        positions=graph.nodes.positions @ rot.T
+    ).update_global_features(relaxed_equiv_weight=0.0)
+    forces_rot = np.array(apply(graph_rot).forces)
+
+    assert_allclose(forces @ rot.T, forces_rot, atol=5e-4)
+
+
+def test_visnet_relaxed_equivariance_beta_injection_does_not_crash(
+    setup_system, relaxed_equivariance_visnet_force_field
+):
+    """Injecting relaxed_equiv_weight into graph globals must not crash
+    and must produce finite outputs for any beta value."""
+    _, graph = setup_system
+    ff = relaxed_equivariance_visnet_force_field
+    apply = jax.jit(ff)
+
+    for beta in [0.0, 0.05, 1.0]:
+        result = apply(graph.update_global_features(relaxed_equiv_weight=beta))
+        assert np.all(np.isfinite(result.forces)), f"NaN forces at beta={beta}"
+        assert np.all(np.isfinite(result.energy)), f"NaN energy at beta={beta}"
+
+
 def test_visnet_uses_coulomb_term(
     setup_system, lri_visnet_force_field, visnet_force_field
 ):
